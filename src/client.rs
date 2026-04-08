@@ -352,7 +352,7 @@ impl ApplePasswordManager {
     pub fn get_otp_for_url(&self, url: &str) -> Result<Payload> {
         let sdata_encrypted = self.session.encrypt(&serde_json::to_vec(&EncryptPayload {
             ACT: Action::Search,
-            URL: None,
+            URL: Some(url.to_string()),
             USR: None,
             TYPE: Some("oneTimeCodes".to_string()),
             frameURLs: Some(vec![url.to_string()]),
@@ -362,6 +362,7 @@ impl ApplePasswordManager {
 
         let msg = Message {
             cmd: Command::DidFillOneTimeCode,
+            url: Some(url.to_string()),
             tabId: Some(0),
             frameId: Some(0),
             payload: Some(MessagePayloadField::String(serde_json::to_string(
@@ -379,7 +380,6 @@ impl ApplePasswordManager {
             capabilities: None,
             setUpTOTPPageURL: None,
             setUpTOTPURI: None,
-            url: None,
         };
 
         let response = self.send_message(&msg)?;
@@ -390,23 +390,29 @@ impl ApplePasswordManager {
     }
 
     pub fn list_otp_for_url(&self, url: &str) -> Result<Payload> {
+        let full_url = if url.contains("://") {
+            url.to_string()
+        } else {
+            format!("https://{}", url)
+        };
         let sdata_encrypted = self.session.encrypt(&serde_json::to_vec(&EncryptPayload {
-            ACT: Action::GhostSearch,
-            URL: None,
+            ACT: Action::Search,
+            URL: Some(full_url.clone()),
             USR: None,
             TYPE: Some("oneTimeCodes".to_string()),
-            frameURLs: Some(vec![url.to_string()]),
+            frameURLs: Some(vec![full_url.clone()]),
         })?)?;
 
         let sdata = self.session.serialize(&sdata_encrypted, true);
 
         let msg = Message {
             cmd: Command::GetOneTimeCodes,
+            url: Some(full_url),
             tabId: Some(0),
             frameId: Some(0),
             payload: Some(MessagePayloadField::String(serde_json::to_string(
                 &SRPHandshakeMessage {
-                    QID: "CmdDidFillOneTimeCode".to_string(),
+                    QID: "CmdGetOneTimeCodes".to_string(),
                     SMSG: Some(SmsgField::Object(SMSGPayload {
                         TID: self.session.username.clone(),
                         SDATA: sdata,
@@ -419,7 +425,6 @@ impl ApplePasswordManager {
             capabilities: None,
             setUpTOTPPageURL: None,
             setUpTOTPURI: None,
-            url: None,
         };
 
         let response = self.send_message(&msg)?;

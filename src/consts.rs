@@ -1,6 +1,9 @@
 use serde_repr::{Deserialize_repr, Serialize_repr};
 
 pub const VERSION: &str = "1.0.1";
+pub const APPLEPW_NAMESPACE: uuid::Uuid = uuid::Uuid::from_bytes([
+    0x6b, 0xa7, 0xb8, 0x10, 0x9d, 0xad, 0x11, 0xd1, 0x80, 0xb4, 0x00, 0xc0, 0x4f, 0xd4, 0x30, 0xc8,
+]);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize_repr, Deserialize_repr)]
 #[repr(i32)]

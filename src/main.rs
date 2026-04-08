@@ -85,28 +85,53 @@ enum OtpCommands {
     List { url: String },
 }
 
-fn print_entries(payload: Payload) {
-    if payload.STATUS != Status::Success {
+fn print_entries(payload: Payload, otp_usernames: Option<std::collections::HashSet<String>>) {
+    if payload.STATUS != Status::Success && payload.STATUS != Status::NoResults {
         eprintln!("Error: {}", payload.STATUS);
         exit(payload.STATUS as i32);
     }
 
-    let mut results = Vec::new();
-    for entry in payload.Entries {
-        match entry {
-            Entry::Password(p) => {
-                results.push(serde_json::json!({
-                    "username": p.USR,
-                    "domain": p.sites.first().cloned().unwrap_or_default(),
-                    "password": p.PWD.unwrap_or_else(|| "Not Included".to_string()),
-                }));
-            }
-            Entry::TOTP(t) => {
-                results.push(serde_json::json!({
-                    "username": t.username,
-                    "domain": t.domain,
-                    "code": t.code.unwrap_or_else(|| "Not Included".to_string()),
-                }));
+    let mut results = serde_json::Map::new();
+    if let Some(entries) = payload.Entries {
+        for (i, entry) in entries.into_iter().enumerate() {
+            match entry {
+                Entry::Password(p) => {
+                    let domain = p.sites.first().cloned().unwrap_or_default();
+                    let username = p.USR.clone();
+                    let uuid_name = format!("{}:{}:{}", domain, username, i);
+                    let id = uuid::Uuid::new_v5(&consts::APPLEPW_NAMESPACE, uuid_name.as_bytes())
+                        .to_string();
+
+                    let mut record = serde_json::json!({
+                        "id": id,
+                        "username": username,
+                        "domain": domain,
+                        "password": p.PWD.unwrap_or_else(|| "Not Included".to_string()),
+                    });
+
+                    if let Some(otps) = &otp_usernames {
+                        record["has_otp"] = serde_json::Value::Bool(otps.contains(&username));
+                    }
+
+                    results.insert(id, record);
+                }
+                Entry::TOTP(t) => {
+                    let domain = t.domain.clone();
+                    let username = t.username.clone();
+                    let uuid_name = format!("{}:{}:{}", domain, username, i);
+                    let id = uuid::Uuid::new_v5(&consts::APPLEPW_NAMESPACE, uuid_name.as_bytes())
+                        .to_string();
+
+                    results.insert(
+                        id.clone(),
+                        serde_json::json!({
+                            "id": id,
+                            "username": username,
+                            "domain": domain,
+                            "code": t.code.unwrap_or_else(|| "Not Included".to_string()),
+                        }),
+                    );
+                }
             }
         }
     }
@@ -217,15 +242,44 @@ fn run(cli: Cli) -> anyhow::Result<()> {
             if client.session.shared_key.is_none() {
                 run_interactive_auth(&mut client)?;
             }
+
             match command {
                 PwCommands::Get { url, username } => {
+                    let otp_usernames = client.list_otp_for_url(&url).ok().and_then(|p| {
+                        p.Entries.map(|entries| {
+                            entries
+                                .into_iter()
+                                .filter_map(|e| {
+                                    if let Entry::TOTP(t) = e {
+                                        Some(t.username)
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect::<std::collections::HashSet<_>>()
+                        })
+                    });
                     let payload =
                         client.get_password_for_url(&url, username.as_deref().unwrap_or(""))?;
-                    print_entries(payload);
+                    print_entries(payload, otp_usernames);
                 }
                 PwCommands::List { url } => {
+                    let otp_usernames = client.list_otp_for_url(&url).ok().and_then(|p| {
+                        p.Entries.map(|entries| {
+                            entries
+                                .into_iter()
+                                .filter_map(|e| {
+                                    if let Entry::TOTP(t) = e {
+                                        Some(t.username)
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect::<std::collections::HashSet<_>>()
+                        })
+                    });
                     let payload = client.get_login_names_for_url(&url)?;
-                    print_entries(payload);
+                    print_entries(payload, otp_usernames);
                 }
             }
         }
@@ -238,11 +292,11 @@ fn run(cli: Cli) -> anyhow::Result<()> {
             match command {
                 OtpCommands::Get { url } => {
                     let payload = client.get_otp_for_url(&url)?;
-                    print_entries(payload);
+                    print_entries(payload, None);
                 }
                 OtpCommands::List { url } => {
                     let payload = client.list_otp_for_url(&url)?;
-                    print_entries(payload);
+                    print_entries(payload, None);
                 }
             }
         }

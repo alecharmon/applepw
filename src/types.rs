@@ -40,7 +40,8 @@ pub enum Entry {
 #[allow(non_snake_case)]
 pub struct Payload {
     pub STATUS: Status,
-    pub Entries: Vec<Entry>,
+    #[serde(default)]
+    pub Entries: Option<Vec<Entry>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
