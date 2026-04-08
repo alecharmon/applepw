@@ -115,7 +115,7 @@ impl ApplePasswordManager {
         self.send_message(&msg)
     }
 
-    fn normalize_url(&self, url: &str) -> String {
+    pub fn normalize_url(&self, url: &str) -> String {
         if url.is_empty() {
             return "".to_string();
         }
@@ -298,12 +298,13 @@ impl ApplePasswordManager {
 
     pub fn get_login_names_for_url(&self, url: &str) -> Result<Payload> {
         let full_url = self.normalize_url(url);
+        let encrypt_url = url.to_string();
         let sdata_encrypted = self.session.encrypt(&serde_json::to_vec(&EncryptPayload {
             ACT: Action::GhostSearch,
-            URL: Some(full_url.clone()),
+            URL: Some(encrypt_url),
             USR: None,
-            TYPE: None,
-            frameURLs: None,
+            TYPE: Some("password".to_string()),
+            frameURLs: Some(vec![full_url.clone()]),
         })?)?;
 
         let sdata = self.session.serialize(&sdata_encrypted, true);
@@ -311,8 +312,8 @@ impl ApplePasswordManager {
         let msg = Message {
             cmd: Command::GetLoginNamesForUrl,
             url: Some(full_url),
-            tabId: Some(1),
-            frameId: Some(1),
+            tabId: Some(0),
+            frameId: Some(0),
             payload: Some(MessagePayloadField::String(serde_json::to_string(
                 &SRPHandshakeMessage {
                     QID: "CmdGetLoginNames4URL".to_string(),

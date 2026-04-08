@@ -97,7 +97,7 @@ jobs:
           VERSION=${{ needs.release.outputs.version }}
           SHA_X86=${{ needs.release.outputs.sha_x86 }}
           SHA_ARM=${{ needs.release.outputs.sha_arm }}
-          
+
           cat <<EOF > Formula/applepw.rb
           class Applepw < Formula
             desc "🔑 a CLI for Apple Passwords 🔒"

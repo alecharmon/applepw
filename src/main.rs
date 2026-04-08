@@ -94,14 +94,14 @@ fn print_entries(payload: Payload, otp_usernames: Option<std::collections::HashS
         exit(payload.STATUS as i32);
     }
 
-    let mut results = serde_json::Map::new();
+    let mut results = Vec::new();
     if let Some(entries) = payload.Entries {
-        for (i, entry) in entries.into_iter().enumerate() {
+        for entry in entries {
             match entry {
                 Entry::Password(p) => {
                     let domain = p.sites.first().cloned().unwrap_or_default();
                     let username = p.USR.clone();
-                    let uuid_name = format!("{}:{}:{}", domain, username, i);
+                    let uuid_name = format!("{}:{}", domain, username);
                     let id = uuid::Uuid::new_v5(&consts::APPLEPW_NAMESPACE, uuid_name.as_bytes())
                         .to_string();
 
@@ -116,24 +116,21 @@ fn print_entries(payload: Payload, otp_usernames: Option<std::collections::HashS
                         record["has_otp"] = serde_json::Value::Bool(otps.contains(&username));
                     }
 
-                    results.insert(id, record);
+                    results.push(record);
                 }
                 Entry::TOTP(t) => {
                     let domain = t.domain.clone();
                     let username = t.username.clone();
-                    let uuid_name = format!("{}:{}:{}", domain, username, i);
+                    let uuid_name = format!("{}:{}", domain, username);
                     let id = uuid::Uuid::new_v5(&consts::APPLEPW_NAMESPACE, uuid_name.as_bytes())
                         .to_string();
 
-                    results.insert(
-                        id.clone(),
-                        serde_json::json!({
-                            "id": id,
-                            "username": username,
-                            "domain": domain,
-                            "code": t.code.unwrap_or_else(|| "Not Included".to_string()),
-                        }),
-                    );
+                    results.push(serde_json::json!({
+                        "id": id,
+                        "username": username,
+                        "domain": domain,
+                        "code": t.code.unwrap_or_else(|| "Not Included".to_string()),
+                    }));
                 }
             }
         }
@@ -208,22 +205,39 @@ fn ensure_daemon() -> anyhow::Result<bool> {
     }
     Ok(restarted)
 }
-
 fn run_search(client: &mut ApplePasswordManager, url: &str) -> anyhow::Result<()> {
-    let mut urls_to_search = vec![url.to_string()];
+    let mut domains_to_search = vec![url.to_string()];
 
     // If no TLD is present (no dot), add common ones
     if !url.contains('.') {
-        for tld in [".com", ".net", ".org", ".io", ".app", ".dev", ".ai"] {
-            urls_to_search.push(format!("{}{}", url, tld));
+        for tld in [".com", ".net", ".org", ".io", ".app", ".dev"] {
+            domains_to_search.push(format!("{}{}", url, tld));
+        }
+    }
+
+    // If it's a subdomain (has at least 2 dots), also try the base domain
+    let parts: Vec<&str> = url.split('.').collect();
+    if parts.len() > 2 {
+        let base_domain = parts[parts.len() - 2..].join(".");
+        domains_to_search.push(base_domain);
+    }
+
+    let mut urls_to_search = Vec::new();
+    for domain in domains_to_search {
+        urls_to_search.push(domain.clone());
+        let normalized = client.normalize_url(&domain);
+        if normalized != domain {
+            urls_to_search.push(normalized);
         }
     }
 
     let mut all_entries = Vec::new();
     let mut all_otp_usernames = std::collections::HashSet::new();
+    let mut seen_entries = std::collections::HashSet::new();
 
     for search_url in urls_to_search {
-        let otp_payload = client.list_otp_for_url(&search_url).ok();
+        let mut otp_payload = client.list_otp_for_url(&search_url).ok();
+
         if let Some(entries) = otp_payload.as_ref().and_then(|p| p.Entries.as_ref()) {
             for e in entries {
                 if let Entry::TOTP(t) = e {
@@ -234,7 +248,7 @@ fn run_search(client: &mut ApplePasswordManager, url: &str) -> anyhow::Result<()
 
         let mut payload = client.get_login_names_for_url(&search_url)?;
 
-        if let Some(otp_entries) = otp_payload.and_then(|mut op| op.Entries.take()) {
+        if let Some(otp_entries) = otp_payload.as_mut().and_then(|op| op.Entries.take()) {
             if let Some(ref mut entries) = payload.Entries {
                 entries.extend(otp_entries);
             } else {
@@ -243,7 +257,25 @@ fn run_search(client: &mut ApplePasswordManager, url: &str) -> anyhow::Result<()
         }
 
         if let Some(entries) = payload.Entries {
-            all_entries.extend(entries);
+            for entry in entries {
+                let entry_key = match &entry {
+                    Entry::Password(p) => {
+                        format!(
+                            "pw:{}:{}",
+                            p.sites.first().cloned().unwrap_or_default(),
+                            p.USR
+                        )
+                    }
+                    Entry::TOTP(t) => {
+                        format!("otp:{}:{}", t.domain, t.username)
+                    }
+                };
+
+                if !seen_entries.contains(&entry_key) {
+                    seen_entries.insert(entry_key);
+                    all_entries.push(entry);
+                }
+            }
         }
     }
 
