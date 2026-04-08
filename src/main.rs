@@ -18,7 +18,10 @@ use utils::{read_bigint, to_base64};
 #[command(about = "🔑 a CLI for Apple Passwords 🔒")]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
+
+    /// URL to search for (default action is pw list)
+    query: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -206,6 +209,37 @@ fn ensure_daemon() -> anyhow::Result<bool> {
     Ok(restarted)
 }
 
+fn run_search(client: &mut ApplePasswordManager, url: &str) -> anyhow::Result<()> {
+    let otp_payload = client.list_otp_for_url(url).ok();
+    let otp_usernames = otp_payload.as_ref().and_then(|p| {
+        p.Entries.as_ref().map(|entries| {
+            entries
+                .iter()
+                .filter_map(|e| {
+                    if let Entry::TOTP(t) = e {
+                        Some(t.username.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<std::collections::HashSet<_>>()
+        })
+    });
+
+    let mut payload = client.get_login_names_for_url(url)?;
+
+    if let Some(otp_entries) = otp_payload.and_then(|mut op| op.Entries.take()) {
+        if let Some(ref mut entries) = payload.Entries {
+            entries.extend(otp_entries);
+        } else {
+            payload.Entries = Some(otp_entries);
+        }
+    }
+
+    print_entries(payload, otp_usernames);
+    Ok(())
+}
+
 fn run_interactive_auth(client: &mut ApplePasswordManager) -> anyhow::Result<()> {
     client.request_challenge()?;
     print!("Enter PIN: ");
@@ -219,14 +253,14 @@ fn run_interactive_auth(client: &mut ApplePasswordManager) -> anyhow::Result<()>
 
 fn run(cli: Cli) -> anyhow::Result<()> {
     match cli.command {
-        Commands::Daemon { port } => {
+        Some(Commands::Daemon { port }) => {
             daemon::start_daemon(port, true)?;
         }
-        Commands::Stop => {
+        Some(Commands::Stop) => {
             daemon::stop_daemon()?;
             println!("Daemon stopped.");
         }
-        Commands::Auth { command } => {
+        Some(Commands::Auth { command }) => {
             let _ = ensure_daemon()?;
             let mut client = ApplePasswordManager::new();
             match command {
@@ -271,7 +305,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
                 }
             }
         }
-        Commands::Pw { command } => {
+        Some(Commands::Pw { command }) => {
             let restarted = ensure_daemon()?;
             let mut client = ApplePasswordManager::new();
             if restarted || client.session.shared_key.is_none() {
@@ -301,26 +335,11 @@ fn run(cli: Cli) -> anyhow::Result<()> {
                     print_entries(payload, otp_usernames);
                 }
                 PwCommands::List { url } => {
-                    let otp_usernames = client.list_otp_for_url(&url).ok().and_then(|p| {
-                        p.Entries.map(|entries| {
-                            entries
-                                .into_iter()
-                                .filter_map(|e| {
-                                    if let Entry::TOTP(t) = e {
-                                        Some(t.username)
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect::<std::collections::HashSet<_>>()
-                        })
-                    });
-                    let payload = client.get_login_names_for_url(&url)?;
-                    print_entries(payload, otp_usernames);
+                    run_search(&mut client, &url)?;
                 }
             }
         }
-        Commands::Otp { command } => {
+        Some(Commands::Otp { command }) => {
             let restarted = ensure_daemon()?;
             let mut client = ApplePasswordManager::new();
             if restarted || client.session.shared_key.is_none() {
@@ -337,6 +356,23 @@ fn run(cli: Cli) -> anyhow::Result<()> {
                     let payload = client.list_otp_for_url(&url)?;
                     print_entries(payload, None);
                 }
+            }
+        }
+        None => {
+            if let Some(url) = cli.query {
+                let restarted = ensure_daemon()?;
+                let mut client = ApplePasswordManager::new();
+                if restarted || client.session.shared_key.is_none() {
+                    run_interactive_auth(&mut client)?;
+                    client = ApplePasswordManager::new();
+                }
+
+                run_search(&mut client, &url)?;
+            } else {
+                // No command and no query, show help
+                use clap::CommandFactory;
+                Cli::command().print_help()?;
+                println!();
             }
         }
     }
