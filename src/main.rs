@@ -210,33 +210,53 @@ fn ensure_daemon() -> anyhow::Result<bool> {
 }
 
 fn run_search(client: &mut ApplePasswordManager, url: &str) -> anyhow::Result<()> {
-    let otp_payload = client.list_otp_for_url(url).ok();
-    let otp_usernames = otp_payload.as_ref().and_then(|p| {
-        p.Entries.as_ref().map(|entries| {
-            entries
-                .iter()
-                .filter_map(|e| {
-                    if let Entry::TOTP(t) = e {
-                        Some(t.username.clone())
-                    } else {
-                        None
-                    }
-                })
-                .collect::<std::collections::HashSet<_>>()
-        })
-    });
+    let mut urls_to_search = vec![url.to_string()];
 
-    let mut payload = client.get_login_names_for_url(url)?;
-
-    if let Some(otp_entries) = otp_payload.and_then(|mut op| op.Entries.take()) {
-        if let Some(ref mut entries) = payload.Entries {
-            entries.extend(otp_entries);
-        } else {
-            payload.Entries = Some(otp_entries);
+    // If no TLD is present (no dot), add common ones
+    if !url.contains('.') {
+        for tld in [".com", ".net", ".org", ".io", ".app", ".dev", ".ai"] {
+            urls_to_search.push(format!("{}{}", url, tld));
         }
     }
 
-    print_entries(payload, otp_usernames);
+    let mut all_entries = Vec::new();
+    let mut all_otp_usernames = std::collections::HashSet::new();
+
+    for search_url in urls_to_search {
+        let otp_payload = client.list_otp_for_url(&search_url).ok();
+        if let Some(entries) = otp_payload.as_ref().and_then(|p| p.Entries.as_ref()) {
+            for e in entries {
+                if let Entry::TOTP(t) = e {
+                    all_otp_usernames.insert(t.username.clone());
+                }
+            }
+        }
+
+        let mut payload = client.get_login_names_for_url(&search_url)?;
+
+        if let Some(otp_entries) = otp_payload.and_then(|mut op| op.Entries.take()) {
+            if let Some(ref mut entries) = payload.Entries {
+                entries.extend(otp_entries);
+            } else {
+                payload.Entries = Some(otp_entries);
+            }
+        }
+
+        if let Some(entries) = payload.Entries {
+            all_entries.extend(entries);
+        }
+    }
+
+    let final_payload = Payload {
+        STATUS: Status::Success,
+        Entries: if all_entries.is_empty() {
+            None
+        } else {
+            Some(all_entries)
+        },
+    };
+
+    print_entries(final_payload, Some(all_otp_usernames));
     Ok(())
 }
 
