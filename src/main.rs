@@ -38,9 +38,10 @@ enum Commands {
         #[command(subcommand)]
         command: OtpCommands,
     },
-    /// Start the daemon.
-    Start {
-        /// Port to listen on.
+    /// Stop the daemon.
+    Stop,
+    #[command(hide = true)]
+    Daemon {
         #[arg(short, long, default_value_t = 0)]
         port: u16,
     },
@@ -135,12 +136,38 @@ fn main() {
     }
 }
 
+fn ensure_daemon() -> anyhow::Result<()> {
+    if !daemon::is_daemon_running() {
+        let exe = std::env::current_exe()?;
+        std::process::Command::new(exe).arg("daemon").spawn()?;
+        // Give it a moment to start and write config
+        std::thread::sleep(std::time::Duration::from_millis(1000));
+    }
+    Ok(())
+}
+
+fn run_interactive_auth(client: &mut ApplePasswordManager) -> anyhow::Result<()> {
+    client.request_challenge()?;
+    print!("Enter PIN: ");
+    std::io::Write::flush(&mut std::io::stdout())?;
+    let mut pin = String::new();
+    std::io::stdin().read_line(&mut pin)?;
+    let pin = pin.trim();
+    client.verify_challenge(pin)?;
+    Ok(())
+}
+
 fn run(cli: Cli) -> anyhow::Result<()> {
     match cli.command {
-        Commands::Start { port } => {
-            daemon::start_daemon(port)?;
+        Commands::Daemon { port } => {
+            daemon::start_daemon(port, true)?;
+        }
+        Commands::Stop => {
+            daemon::stop_daemon()?;
+            println!("Daemon stopped.");
         }
         Commands::Auth { command } => {
+            ensure_daemon()?;
             let mut client = ApplePasswordManager::new();
             match command {
                 Some(AuthCommands::Request) => {
@@ -180,18 +207,16 @@ fn run(cli: Cli) -> anyhow::Result<()> {
                     println!("{}", serde_json::to_string(&output).unwrap());
                 }
                 None => {
-                    client.request_challenge()?;
-                    print!("Enter PIN: ");
-                    std::io::Write::flush(&mut std::io::stdout())?;
-                    let mut pin = String::new();
-                    std::io::stdin().read_line(&mut pin)?;
-                    let pin = pin.trim();
-                    client.verify_challenge(pin)?;
+                    run_interactive_auth(&mut client)?;
                 }
             }
         }
         Commands::Pw { command } => {
-            let client = ApplePasswordManager::new();
+            ensure_daemon()?;
+            let mut client = ApplePasswordManager::new();
+            if client.session.shared_key.is_none() {
+                run_interactive_auth(&mut client)?;
+            }
             match command {
                 PwCommands::Get { url, username } => {
                     let payload =
@@ -205,7 +230,11 @@ fn run(cli: Cli) -> anyhow::Result<()> {
             }
         }
         Commands::Otp { command } => {
-            let client = ApplePasswordManager::new();
+            ensure_daemon()?;
+            let mut client = ApplePasswordManager::new();
+            if client.session.shared_key.is_none() {
+                run_interactive_auth(&mut client)?;
+            }
             match command {
                 OtpCommands::Get { url } => {
                     let payload = client.get_otp_for_url(&url)?;

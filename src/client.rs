@@ -1,11 +1,11 @@
 use crate::consts::{Action, Command, MsgTypes, SecretSessionVersion};
 use crate::srp::SRPSession;
 use crate::types::{
-    EncryptPayload, Message, MessagePayloadField, PAKEMessage, PakeField, Payload, SMSGPayload, SMSG,
-    SRPHandshakeMessage, SmsgField,
+    EncryptPayload, Message, MessagePayloadField, PAKEMessage, PakeField, Payload, SMSG,
+    SMSGPayload, SRPHandshakeMessage, SmsgField,
 };
 use crate::utils::{read_bigint, read_config, to_base64, to_buffer, write_config};
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use std::net::UdpSocket;
 use std::time::SystemTime;
 
@@ -27,7 +27,6 @@ impl Default for ApplePasswordManager {
 impl ApplePasswordManager {
     pub fn new() -> Self {
         let mut session = SRPSession::new(true);
-        let _ = write_config(None, None, None);
         let (username, shared_key, port) = read_config().unwrap_or((None, None, None));
 
         let mut values = crate::types::SRPValues::default();
@@ -249,12 +248,7 @@ impl ApplePasswordManager {
             match err {
                 0 => {}
                 1 => return Err(anyhow!("Incorrect challenge PIN")),
-                _ => {
-                    return Err(anyhow!(
-                        "Invalid server verification: error code {}",
-                        err
-                    ))
-                }
+                _ => return Err(anyhow!("Invalid server verification: error code {}", err)),
             }
         }
 

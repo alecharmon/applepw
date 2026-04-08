@@ -1,14 +1,14 @@
 use crate::types::SRPValues;
 use crate::utils::{from_base64, pad, random_bytes, read_bigint, sha256, to_base64, to_buffer};
-use aes_gcm::{
-    aead::{Aead, KeyInit},
-    AesGcm,
-};
 use aes::Aes128;
-use typenum::U16;
-use anyhow::{anyhow, Result};
+use aes_gcm::{
+    AesGcm,
+    aead::{Aead, KeyInit},
+};
+use anyhow::{Result, anyhow};
 use num_bigint::BigUint;
 use num_traits::Num;
+use typenum::U16;
 
 lazy_static::lazy_static! {
     static ref GROUP_PRIME: BigUint = BigUint::from_str_radix(

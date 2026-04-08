@@ -1,6 +1,7 @@
 use crate::types::ManifestConfig;
-use crate::utils::{clear_config, write_config};
+use crate::utils::{data_path, write_config};
 use anyhow::{Result, anyhow};
+use daemonize::Daemonize;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::UdpSocket;
@@ -26,8 +27,73 @@ fn read_manifest() -> Result<ManifestConfig> {
     ))
 }
 
-pub fn start_daemon(mut port: u16) -> Result<()> {
-    clear_config()?;
+pub fn is_daemon_running() -> bool {
+    let dir = data_path();
+    let pid_file = dir.join("daemon.pid");
+    if !pid_file.exists() {
+        return false;
+    }
+
+    if let Some(pid) = fs::read_to_string(&pid_file)
+        .ok()
+        .and_then(|c| c.trim().parse::<i32>().ok())
+    {
+        // On Unix, kill(pid, 0) checks if process exists
+        return unsafe { libc::kill(pid, 0) == 0 };
+    }
+    false
+}
+
+pub fn stop_daemon() -> Result<()> {
+    let dir = data_path();
+    let pid_file = dir.join("daemon.pid");
+    if !pid_file.exists() {
+        return Err(anyhow!("Daemon is not running."));
+    }
+
+    if let Some(pid) = fs::read_to_string(&pid_file)
+        .ok()
+        .and_then(|c| c.trim().parse::<i32>().ok())
+    {
+        unsafe {
+            if libc::kill(pid, 15) == 0 {
+                let _ = fs::remove_file(pid_file);
+                return Ok(());
+            } else {
+                let err = std::io::Error::last_os_error();
+                if err.kind() == std::io::ErrorKind::NotFound {
+                    let _ = fs::remove_file(pid_file);
+                    return Ok(());
+                }
+                return Err(anyhow!("Failed to stop daemon with PID {}: {}", pid, err));
+            }
+        }
+    }
+    let _ = fs::remove_file(pid_file);
+    Ok(())
+}
+
+pub fn start_daemon(mut port: u16, should_daemonize: bool) -> Result<()> {
+    if is_daemon_running() && should_daemonize {
+        return Ok(());
+    }
+
+    if should_daemonize {
+        let dir = data_path();
+        fs::create_dir_all(&dir)?;
+
+        let stdout = fs::File::create(dir.join("daemon.out"))?;
+        let stderr = fs::File::create(dir.join("daemon.err"))?;
+
+        let daemonize = Daemonize::new()
+            .pid_file(dir.join("daemon.pid"))
+            .working_directory(&dir)
+            .stdout(stdout)
+            .stderr(stderr);
+
+        daemonize.start()?;
+    }
+
     let config = read_manifest()?;
 
     let mut child = Command::new(&config.path)
@@ -36,13 +102,17 @@ pub fn start_daemon(mut port: u16) -> Result<()> {
         .stdout(Stdio::piped())
         .spawn()?;
 
-    println!("applepw helper found & launched.");
+    if !should_daemonize {
+        println!("applepw helper found & launched.");
+    }
 
     let socket = UdpSocket::bind(format!("127.0.0.1:{}", port))?;
     port = socket.local_addr()?.port();
     write_config(None, None, Some(port))?;
 
-    println!("applepw Helper Listening on port {}.", port);
+    if !should_daemonize {
+        println!("applepw Helper Listening on port {}.", port);
+    }
 
     let mut stdin = child.stdin.take().expect("Failed to open stdin");
     let mut stdout = child.stdout.take().expect("Failed to open stdout");
@@ -61,15 +131,15 @@ pub fn start_daemon(mut port: u16) -> Result<()> {
         let len = (data.len() as u32).to_le_bytes();
         if let Err(e) = stdin.write_all(&len) {
             eprintln!("Failed to write length to stdin: {}", e);
-            continue;
+            break;
         }
         if let Err(e) = stdin.write_all(data) {
             eprintln!("Failed to write data to stdin: {}", e);
-            continue;
+            break;
         }
         if let Err(e) = stdin.flush() {
             eprintln!("Failed to flush stdin: {}", e);
-            continue;
+            break;
         }
 
         let mut out_len_buf = [0u8; 4];
@@ -99,4 +169,5 @@ pub fn start_daemon(mut port: u16) -> Result<()> {
             let _ = socket.send_to(&out_data, src);
         }
     }
+    Ok(())
 }
