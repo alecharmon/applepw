@@ -1,0 +1,123 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        target: [x86_64-apple-darwin, aarch64-apple-darwin]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar -czf ../../../applepw-${{ matrix.target }}.tar.gz applepw
+          cd -
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: applepw-${{ matrix.target }}
+          path: applepw-${{ matrix.target }}.tar.gz
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+      sha_x86: ${{ steps.shasums.outputs.sha_x86 }}
+      sha_arm: ${{ steps.shasums.outputs.sha_arm }}
+    steps:
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Get version
+        id: get_version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Calculate SHAs
+        id: shasums
+        run: |
+          echo "sha_x86=$(sha256sum applepw-x86_64-apple-darwin.tar.gz | awk '{print $1}')" >> $GITHUB_OUTPUT
+          echo "sha_arm=$(sha256sum applepw-aarch64-apple-darwin.tar.gz | awk '{print $1}')" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            applepw-x86_64-apple-darwin.tar.gz
+            applepw-aarch64-apple-darwin.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  update-tap:
+    name: Update Homebrew Tap
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Tap
+        uses: actions/checkout@v4
+        with:
+          repository: alecharmon/homebrew-tap
+          token: ${{ secrets.TAP_GITHUB_TOKEN }}
+
+      - name: Update Formula
+        run: |
+          VERSION=${{ needs.release.outputs.version }}
+          SHA_X86=${{ needs.release.outputs.sha_x86 }}
+          SHA_ARM=${{ needs.release.outputs.sha_arm }}
+          
+          cat <<EOF > Formula/applepw.rb
+          class Applepw < Formula
+            desc "🔑 a CLI for Apple Passwords 🔒"
+            homepage "https://github.com/alecharmon/applepw"
+            version "${VERSION}"
+
+            on_macos do
+              if Hardware::CPU.intel?
+                url "https://github.com/alecharmon/applepw/releases/download/v#{version}/applepw-x86_64-apple-darwin.tar.gz"
+                sha256 "${SHA_X86}"
+              end
+              if Hardware::CPU.arm?
+                url "https://github.com/alecharmon/applepw/releases/download/v#{version}/applepw-aarch64-apple-darwin.tar.gz"
+                sha256 "${SHA_ARM}"
+              end
+            end
+
+            def install
+              bin.install "applepw"
+            end
+
+            test do
+              system "#{bin}/applepw", "--version"
+            end
+          end
+          EOF
+
+      - name: Commit and Push
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/applepw.rb
+          git commit -m "Update applepw to v${{ needs.release.outputs.version }}"
+          git push
