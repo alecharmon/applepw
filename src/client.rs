@@ -99,6 +99,22 @@ impl ApplePasswordManager {
         Ok(response)
     }
 
+    pub fn get_capabilities(&self) -> Result<serde_json::Value> {
+        let msg = Message {
+            cmd: Command::GetCapabilities,
+            payload: None,
+            msg: None,
+            capabilities: None,
+            setUpTOTPPageURL: None,
+            setUpTOTPURI: None,
+            url: None,
+            tabId: None,
+            frameId: None,
+        };
+
+        self.send_message(&msg)
+    }
+
     pub fn request_challenge(&mut self) -> Result<(num_bigint::BigUint, num_bigint::BigUint)> {
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)?

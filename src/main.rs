@@ -161,14 +161,49 @@ fn main() {
     }
 }
 
-fn ensure_daemon() -> anyhow::Result<()> {
-    if !daemon::is_daemon_running() {
+fn ensure_daemon() -> anyhow::Result<bool> {
+    let mut needs_start = !daemon::is_daemon_running();
+    let mut restarted = false;
+
+    if !needs_start {
+        // Test if the daemon is responsive
+        let client = ApplePasswordManager::new();
+        if client.get_capabilities().is_err() {
+            // Unresponsive, kill and restart
+            let _ = daemon::stop_daemon();
+            needs_start = true;
+        }
+    }
+
+    if needs_start {
         let exe = std::env::current_exe()?;
         std::process::Command::new(exe).arg("daemon").spawn()?;
-        // Give it a moment to start and write config
-        std::thread::sleep(std::time::Duration::from_millis(1000));
+        restarted = true;
+
+        // Wait for daemon to start and update config
+        let mut attempts = 0;
+        let mut success = false;
+        while attempts < 10 {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            let is_responsive = daemon::is_daemon_running()
+                && std::panic::catch_unwind(ApplePasswordManager::new)
+                    .ok()
+                    .and_then(|client| client.get_capabilities().ok())
+                    .is_some();
+
+            if is_responsive {
+                success = true;
+                break;
+            }
+            attempts += 1;
+        }
+        if !success {
+            return Err(anyhow::anyhow!(
+                "Daemon failed to become responsive after start"
+            ));
+        }
     }
-    Ok(())
+    Ok(restarted)
 }
 
 fn run_interactive_auth(client: &mut ApplePasswordManager) -> anyhow::Result<()> {
@@ -192,7 +227,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
             println!("Daemon stopped.");
         }
         Commands::Auth { command } => {
-            ensure_daemon()?;
+            let _ = ensure_daemon()?;
             let mut client = ApplePasswordManager::new();
             match command {
                 Some(AuthCommands::Request) => {
@@ -237,10 +272,12 @@ fn run(cli: Cli) -> anyhow::Result<()> {
             }
         }
         Commands::Pw { command } => {
-            ensure_daemon()?;
+            let restarted = ensure_daemon()?;
             let mut client = ApplePasswordManager::new();
-            if client.session.shared_key.is_none() {
+            if restarted || client.session.shared_key.is_none() {
                 run_interactive_auth(&mut client)?;
+                // Refresh client after auth
+                client = ApplePasswordManager::new();
             }
 
             match command {
@@ -284,10 +321,12 @@ fn run(cli: Cli) -> anyhow::Result<()> {
             }
         }
         Commands::Otp { command } => {
-            ensure_daemon()?;
+            let restarted = ensure_daemon()?;
             let mut client = ApplePasswordManager::new();
-            if client.session.shared_key.is_none() {
+            if restarted || client.session.shared_key.is_none() {
                 run_interactive_auth(&mut client)?;
+                // Refresh client after auth
+                client = ApplePasswordManager::new();
             }
             match command {
                 OtpCommands::Get { url } => {
