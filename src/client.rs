@@ -126,6 +126,18 @@ impl ApplePasswordManager {
         }
     }
 
+    fn build_password_lookup_payload(&self, url: &str, login_name: &str) -> EncryptPayload {
+        let full_url = self.normalize_url(url);
+
+        EncryptPayload {
+            ACT: Action::Search,
+            URL: Some(url.to_string()),
+            USR: Some(login_name.to_string()),
+            TYPE: None,
+            frameURLs: Some(vec![full_url]),
+        }
+    }
+
     pub fn request_challenge(&mut self) -> Result<(num_bigint::BigUint, num_bigint::BigUint)> {
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)?
@@ -340,13 +352,9 @@ impl ApplePasswordManager {
 
     pub fn get_password_for_url(&self, url: &str, login_name: &str) -> Result<Payload> {
         let full_url = self.normalize_url(url);
-        let sdata_encrypted = self.session.encrypt(&serde_json::to_vec(&EncryptPayload {
-            ACT: Action::Search,
-            URL: Some(full_url.clone()),
-            USR: Some(login_name.to_string()),
-            TYPE: None,
-            frameURLs: None,
-        })?)?;
+        let sdata_encrypted = self.session.encrypt(&serde_json::to_vec(
+            &self.build_password_lookup_payload(url, login_name),
+        )?)?;
 
         let sdata = self.session.serialize(&sdata_encrypted, true);
 
@@ -459,5 +467,25 @@ impl ApplePasswordManager {
             serde_json::from_str(response["payload"].as_str().unwrap_or_default())
                 .or_else(|_| serde_json::from_value(response["payload"].clone()))?;
         self.decrypt_payload(&smsg_payload)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn password_lookup_payload_uses_original_url_and_frame_urls() {
+        let client = ApplePasswordManager::new();
+
+        let payload = client.build_password_lookup_payload("carta.com", "alecharmon@outlook.com");
+
+        assert_eq!(payload.ACT, Action::Search);
+        assert_eq!(payload.URL.as_deref(), Some("carta.com"));
+        assert_eq!(payload.USR.as_deref(), Some("alecharmon@outlook.com"));
+        assert_eq!(
+            payload.frameURLs,
+            Some(vec!["https://carta.com".to_string()])
+        );
     }
 }
