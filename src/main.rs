@@ -8,6 +8,7 @@ pub mod utils;
 use clap::{Parser, Subcommand};
 use client::ApplePasswordManager;
 use consts::{Status, VERSION};
+use serde::Serialize;
 use std::process::exit;
 use types::{Entry, Payload};
 use utils::{read_bigint, to_base64};
@@ -43,6 +44,8 @@ enum Commands {
     },
     /// Stop the daemon.
     Stop,
+    /// Report daemon and authentication status.
+    Status,
     #[command(hide = true)]
     Daemon {
         #[arg(short, long, default_value_t = 0)]
@@ -86,6 +89,70 @@ enum OtpCommands {
     Get { url: String },
     /// List available OTPs for a website.
     List { url: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum CliStatus {
+    Ready,
+    DaemonStopped,
+    DaemonUnresponsive,
+    Unauthenticated,
+}
+
+fn evaluate_status(
+    daemon_running: bool,
+    daemon_responsive: bool,
+    authenticated: bool,
+) -> CliStatus {
+    if !daemon_running {
+        CliStatus::DaemonStopped
+    } else if !daemon_responsive {
+        CliStatus::DaemonUnresponsive
+    } else if !authenticated {
+        CliStatus::Unauthenticated
+    } else {
+        CliStatus::Ready
+    }
+}
+
+fn build_status_payload(
+    daemon_running: bool,
+    daemon_responsive: bool,
+    authenticated: bool,
+) -> serde_json::Value {
+    let status = evaluate_status(daemon_running, daemon_responsive, authenticated);
+    let daemon = if daemon_running {
+        if daemon_responsive {
+            "running"
+        } else {
+            "unresponsive"
+        }
+    } else {
+        "stopped"
+    };
+
+    serde_json::json!({
+        "status": status,
+        "daemon": daemon,
+        "authenticated": authenticated,
+    })
+}
+
+fn get_status_payload() -> serde_json::Value {
+    let daemon_running = daemon::is_daemon_running();
+    let daemon_responsive = if daemon_running {
+        std::panic::catch_unwind(ApplePasswordManager::new)
+            .ok()
+            .and_then(|client| client.get_capabilities().ok())
+            .is_some()
+    } else {
+        false
+    };
+    let client = ApplePasswordManager::new();
+    let authenticated = client.session.shared_key.is_some();
+
+    build_status_payload(daemon_running, daemon_responsive, authenticated)
 }
 
 fn print_entries(payload: Payload, otp_usernames: Option<std::collections::HashSet<String>>) {
@@ -312,6 +379,9 @@ fn run(cli: Cli) -> anyhow::Result<()> {
             daemon::stop_daemon()?;
             println!("Daemon stopped.");
         }
+        Some(Commands::Status) => {
+            println!("{}", serde_json::to_string(&get_status_payload()).unwrap());
+        }
         Some(Commands::Auth { command }) => {
             let _ = ensure_daemon()?;
             let mut client = ApplePasswordManager::new();
@@ -430,4 +500,47 @@ fn run(cli: Cli) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_evaluation_ready_when_daemon_is_responsive_and_authenticated() {
+        assert_eq!(evaluate_status(true, true, true), CliStatus::Ready);
+    }
+
+    #[test]
+    fn status_evaluation_daemon_stopped_when_not_running() {
+        assert_eq!(
+            evaluate_status(false, false, true),
+            CliStatus::DaemonStopped
+        );
+    }
+
+    #[test]
+    fn status_evaluation_daemon_unresponsive_when_running_but_not_healthy() {
+        assert_eq!(
+            evaluate_status(true, false, true),
+            CliStatus::DaemonUnresponsive
+        );
+    }
+
+    #[test]
+    fn status_evaluation_unauthenticated_when_running_without_auth() {
+        assert_eq!(
+            evaluate_status(true, true, false),
+            CliStatus::Unauthenticated
+        );
+    }
+
+    #[test]
+    fn status_payload_serializes_expected_json_shape() {
+        let payload = build_status_payload(true, true, false);
+
+        assert_eq!(payload["status"], "unauthenticated");
+        assert_eq!(payload["daemon"], "running");
+        assert_eq!(payload["authenticated"], false);
+    }
 }

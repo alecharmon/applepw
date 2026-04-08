@@ -56,6 +56,9 @@ applepw otp get carta.com
 
 ### Management
 ```bash
+# Report daemon/auth status as JSON
+applepw status
+
 # Stop the background daemon
 applepw stop
 
@@ -66,5 +69,4 @@ applepw auth
 ## How it Works
 
 `applepw` communicates with the official macOS `PasswordManagerBrowserExtensionHelper` via a background daemon. It uses the **SRP (Secure Remote Password)** protocol to establish a secure, encrypted session with the system keychain, ensuring your credentials never leave your machine unencrypted.
-
 
