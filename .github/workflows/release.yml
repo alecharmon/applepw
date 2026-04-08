@@ -5,6 +5,9 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Build (${{ matrix.target }})
@@ -71,13 +74,12 @@ jobs:
           echo "sha_arm=$(sha256sum applepw-aarch64-apple-darwin.tar.gz | awk '{print $1}')" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: |
             applepw-x86_64-apple-darwin.tar.gz
             applepw-aarch64-apple-darwin.tar.gz
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
 
   update-tap:
     name: Update Homebrew Tap
