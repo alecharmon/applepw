@@ -1,3 +1,4 @@
+pub mod browser_bridge;
 pub mod client;
 pub mod consts;
 pub mod daemon;
@@ -27,6 +28,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Configure a browser-hosted helper for macOS with parent launch constraints.
+    Bridge {
+        #[command(subcommand)]
+        command: BridgeCommands,
+    },
     /// Authenticate CLI with daemon.
     Auth {
         #[command(subcommand)]
@@ -49,6 +55,19 @@ enum Commands {
     #[command(hide = true)]
     Daemon {
         #[arg(short, long, default_value_t = 0)]
+        port: u16,
+        #[arg(long)]
+        foreground: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum BridgeCommands {
+    /// Register the bridge's native host for Chrome, Edge, or Brave (no sudo).
+    Setup {
+        #[arg(long, default_value = "chrome")]
+        browser: browser_bridge::Browser,
+        #[arg(long, default_value_t = 32145)]
         port: u16,
     },
 }
@@ -229,6 +248,7 @@ fn main() {
 }
 
 fn ensure_daemon() -> anyhow::Result<bool> {
+    let bridge_configured = browser_bridge::load_config()?.is_some();
     let mut needs_start = !daemon::is_daemon_running();
     let mut restarted = false;
 
@@ -236,6 +256,9 @@ fn ensure_daemon() -> anyhow::Result<bool> {
         // Test if the daemon is responsive
         let client = ApplePasswordManager::new();
         if client.get_capabilities().is_err() {
+            if bridge_configured {
+                return Err(anyhow::anyhow!(browser_bridge::CONNECTION_HELP));
+            }
             // Unresponsive, kill and restart
             let _ = daemon::stop_daemon();
             needs_start = true;
@@ -243,6 +266,11 @@ fn ensure_daemon() -> anyhow::Result<bool> {
     }
 
     if needs_start {
+        // Diagnose a launch constraint before detaching, instead of waiting for
+        // a helper that macOS will kill before it can display the PIN.
+        if !bridge_configured {
+            daemon::check_direct_launch()?;
+        }
         let exe = std::env::current_exe()?;
         std::process::Command::new(exe).arg("daemon").spawn()?;
         restarted = true;
@@ -250,7 +278,7 @@ fn ensure_daemon() -> anyhow::Result<bool> {
         // Wait for daemon to start and update config
         let mut attempts = 0;
         let mut success = false;
-        while attempts < 10 {
+        while attempts < 25 {
             std::thread::sleep(std::time::Duration::from_millis(200));
             let is_responsive = daemon::is_daemon_running()
                 && std::panic::catch_unwind(ApplePasswordManager::new)
@@ -265,6 +293,9 @@ fn ensure_daemon() -> anyhow::Result<bool> {
             attempts += 1;
         }
         if !success {
+            if bridge_configured {
+                return Err(anyhow::anyhow!(browser_bridge::CONNECTION_HELP));
+            }
             return Err(anyhow::anyhow!(
                 "Daemon failed to become responsive after start"
             ));
@@ -372,8 +403,13 @@ fn run_interactive_auth(client: &mut ApplePasswordManager) -> anyhow::Result<()>
 
 fn run(cli: Cli) -> anyhow::Result<()> {
     match cli.command {
-        Some(Commands::Daemon { port }) => {
-            daemon::start_daemon(port, true)?;
+        Some(Commands::Bridge { command }) => match command {
+            BridgeCommands::Setup { browser, port } => {
+                browser_bridge::setup(browser, port)?;
+            }
+        },
+        Some(Commands::Daemon { port, foreground }) => {
+            daemon::start_daemon(port, !foreground)?;
         }
         Some(Commands::Stop) => {
             daemon::stop_daemon()?;

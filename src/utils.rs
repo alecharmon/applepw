@@ -5,9 +5,13 @@ use num_bigint::BigUint;
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 use std::fs;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::PathBuf;
 
 pub fn data_path() -> PathBuf {
+    if let Some(path) = std::env::var_os("APPLEPW_HOME") {
+        return PathBuf::from(path);
+    }
     let mut path = dirs::home_dir().unwrap_or_default();
     path.push(".applepw");
     path
@@ -61,6 +65,13 @@ pub fn clear_config() -> Result<()> {
     Ok(())
 }
 
+/// A helper's SRP session dies with that helper. Preserve only the daemon port.
+pub fn clear_session() -> Result<()> {
+    let (_, _, port) = read_config().unwrap_or((None, None, None));
+    clear_config()?;
+    write_config(None, None, port)
+}
+
 pub fn write_config(
     username: Option<String>,
     shared_key: Option<BigUint>,
@@ -92,7 +103,13 @@ pub fn write_config(
     }
 
     let serialized = toml::to_string(&existing_config)?;
-    let mut file = fs::File::create(&path)?;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&path)?;
+    file.set_permissions(fs::Permissions::from_mode(0o600))?;
     use std::io::Write;
     file.write_all(serialized.as_bytes())?;
     file.sync_all()?;

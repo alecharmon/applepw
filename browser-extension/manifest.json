@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "applepw Browser Bridge",
+  "version": "0.1.0",
+  "description": "Launch Apple's Passwords helper from a signed browser for the local applepw CLI.",
+  "permissions": ["nativeMessaging"],
+  "action": {"default_popup": "bridge.html"},
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'; connect-src ws://127.0.0.1:*"
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtWXrwrdNFZD/+9br6pPPBf0pGtYP3R4JBrddVe0KWCItZXOOxQQRuw8kOsWTmD9AQEf4g2khYAGfXHnxyTYLLj9KbuQILvtv2RP8YmsDoekNIlhBhJERK4IH3yuG5sH4ssOB5SZdl8luEz23RPTYpRxb/vfqBVPyBzeMQu8d7Wfhd3wtd9CbEzXNvcUQErJSAlvypsXglIg+PVA5rqqS34FP5Web64YDuKpbmtvmtPPVL6uPy3bcnMeA+UtTOik6WAxSw5Yzb87iRoeWlJ6xicpUuXtxmO5Tu+hyxMWzOTEgmUdmg++CtXjCIW0jnBNQv7MgxUMIOU+vzTbx44qBmwIDAQAB"
+}

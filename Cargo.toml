@@ -29,3 +29,4 @@ hmac = "0.12"
 crypto-common = "0.1"
 generic-array = "0.14"
 uuid = { version = "1.8", features = ["v5"] }
+tungstenite = { version = "0.28", default-features = false, features = ["handshake"] }
