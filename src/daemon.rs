@@ -8,7 +8,7 @@ use std::net::UdpSocket;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-fn read_manifest() -> Result<ManifestConfig> {
+pub(crate) fn read_manifest() -> Result<ManifestConfig> {
     let paths = [
         "/Library/Application Support/Mozilla/NativeMessagingHosts/com.apple.passwordmanager.json",
         "/Library/Google/Chrome/NativeMessagingHosts/com.apple.passwordmanager.json",
@@ -25,6 +25,25 @@ fn read_manifest() -> Result<ManifestConfig> {
     Err(anyhow!(
         "applepw Helper manifest not found. You must be running macOS 14 or above."
     ))
+}
+
+pub fn check_direct_launch() -> Result<()> {
+    let config = read_manifest()?;
+    let signature = Command::new("/usr/bin/codesign")
+        // Launch constraints are printed at verbosity 3, not verbosity 2.
+        .args(["-dvvv", &config.path])
+        .output()?;
+    if !signature.status.success() {
+        return Err(anyhow!(
+            "Cannot inspect the Apple Passwords helper code signature"
+        ));
+    }
+    if String::from_utf8_lossy(&signature.stderr).contains("Has Parent Launch Constraints") {
+        return Err(anyhow!(
+            "macOS restricts the Apple Passwords helper to a signed browser. Run `applepw bridge setup` and follow the browser-bridge instructions, then retry authentication."
+        ));
+    }
+    Ok(())
 }
 
 pub fn is_daemon_running() -> bool {
@@ -78,6 +97,11 @@ pub fn start_daemon(mut port: u16, should_daemonize: bool) -> Result<()> {
         return Ok(());
     }
 
+    let bridge_config = crate::browser_bridge::load_config()?;
+    if bridge_config.is_none() {
+        check_direct_launch()?;
+    }
+
     if should_daemonize {
         let dir = data_path();
         fs::create_dir_all(&dir)?;
@@ -92,6 +116,10 @@ pub fn start_daemon(mut port: u16, should_daemonize: bool) -> Result<()> {
             .stderr(stderr);
 
         daemonize.start()?;
+    }
+
+    if let Some(config) = bridge_config {
+        return crate::browser_bridge::serve(config, port);
     }
 
     let config = read_manifest()?;
@@ -109,6 +137,7 @@ pub fn start_daemon(mut port: u16, should_daemonize: bool) -> Result<()> {
     let socket = UdpSocket::bind(format!("127.0.0.1:{}", port))?;
     port = socket.local_addr()?.port();
     write_config(None, None, Some(port))?;
+    crate::utils::clear_session()?;
 
     if !should_daemonize {
         println!("applepw Helper Listening on port {}.", port);

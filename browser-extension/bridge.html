@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>applepw Browser Bridge</title></head>
+<body>
+  <h1>applepw Browser Bridge</h1>
+  <p>Keep this tab open while using Apple Passwords in Raycast or the CLI.</p>
+  <p>This grants the local applepw CLI access through Apple's Passwords helper.
+     Apple will still require its authentication code. No website access is requested.</p>
+  <form id="connect-form">
+    <p><label>Local bridge port <input id="port" type="number" min="1" max="65535" value="32145" required></label></p>
+    <p><label>Pairing token from applepw bridge setup <input id="token" type="password" autocomplete="off" minlength="64" maxlength="64" required></label></p>
+    <button type="submit">Connect</button>
+    <button id="disconnect" type="button">Disconnect</button>
+  </form>
+  <p id="status" role="status">Disconnected</p>
+  <script type="module" src="bridge.js"></script>
+</body>
+</html>
